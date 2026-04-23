@@ -1,0 +1,27 @@
+# Directories excluded from Claude security review.
+# One path per line. Lines starting with # and blank lines are ignored.
+# Glob patterns (e.g. **/foo) are supported by the action.
+
+# Dependency / package manager caches
+node_modules
+vendor
+.venv
+venv
+__pycache__
+
+# Build output
+dist
+build
+target
+out
+
+# Generated evidence (static, already attested)
+compliance/soc2/evidence
+
+# Semgrep rule test fixtures — intentionally contain vulnerable patterns
+.github/security/semgrep-rules/tests
+
+# Lockfiles and minified assets
+**/*.lock
+**/*.min.js
+**/*.min.css

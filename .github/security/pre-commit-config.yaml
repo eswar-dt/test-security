@@ -1,0 +1,120 @@
+# Pre-commit configuration for security and code quality checks
+# Install: pre-commit install
+# Run all hooks: pre-commit run --all-files
+# Run specific hook: pre-commit run gitleaks --all-files
+
+repos:
+  # Detect secrets in code
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.0
+    hooks:
+      - id: gitleaks
+        name: Detect secrets with gitleaks
+        entry: gitleaks detect --source
+        language: system
+        types: [text]
+        stages: [commit]
+
+  # Trailing whitespace
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+        entry: trailing-whitespace-fixer
+        language: python
+        types: [text]
+
+  # End of file fixer
+      - id: end-of-file-fixer
+        name: Fix end of file
+        entry: end-of-file-fixer
+        language: python
+        types: [text]
+
+  # YAML validation
+      - id: check-yaml
+        name: Check YAML syntax
+        entry: check-yaml
+        language: python
+        types: [yaml]
+
+  # JSON validation
+      - id: check-json
+        name: Check JSON syntax
+        entry: check-json
+        language: python
+        types: [json]
+
+  # Merge conflict detection
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+        entry: check-merge-conflict
+        language: python
+        types: [text]
+
+  # YAML linting
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.32.0
+    hooks:
+      - id: yamllint
+        name: Lint YAML files
+        entry: yamllint -d relaxed
+        language: system
+        types: [yaml]
+
+  # Terraform formatting and validation
+  - repo: https://github.com/terraform-docs/terraform-docs
+    rev: v0.16.0
+    hooks:
+      - id: terraform-docs-go
+        name: Terraform docs
+        entry: terraform-docs markdown table --output-file README.md
+        language: golang
+        files: (\.tf)$
+        require_serial: true
+
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.83.0
+    hooks:
+      - id: terraform_fmt
+        name: Terraform format
+        entry: terraform fmt -recursive
+        language: system
+        types: [terraform]
+
+      - id: terraform_validate
+        name: Terraform validate
+        entry: terraform validate
+        language: system
+        types: [terraform]
+
+      - id: tfsec
+        name: TFSec security scan
+        entry: tfsec
+        language: system
+        types: [terraform]
+
+  # General code quality
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v3.0.0
+    hooks:
+      - id: prettier
+        name: Prettier code formatter
+        types: [json, yaml, markdown]
+
+# Configure which file types to check
+default_language_version:
+  python: python3
+
+# Exclude certain paths
+exclude: |
+  (?x)^(
+      \.git/|
+      \.venv/|
+      __pycache__/|
+      build/|
+      dist/|
+      \.terraform/|
+      node_modules/
+  )

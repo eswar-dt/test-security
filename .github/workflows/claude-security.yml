@@ -1,0 +1,62 @@
+name: Claude Security Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'README.*'
+      - '.gitignore'
+
+# Cancel superseded runs on the same PR
+concurrency:
+  group: claude-security-review-${{ github.ref }}
+  cancel-in-progress: true
+
+# Principle of least privilege
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  security-review:
+    name: Claude security review
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      EXCLUDE_FILE: .github/security/claude-review/exclude-dirs.txt
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Load exclude directories
+        id: excludes
+        run: |
+          set -euo pipefail
+          if [[ ! -f "$EXCLUDE_FILE" ]]; then
+            echo "::error::Exclude file not found: $EXCLUDE_FILE"
+            exit 1
+          fi
+          # Strip comments and blank lines, join with commas
+          DIRS=$(grep -v '^[[:space:]]*#' "$EXCLUDE_FILE" \
+                 | grep -v '^[[:space:]]*$' \
+                 | sed 's/[[:space:]]*$//' \
+                 | paste -sd ',' -)
+          echo "Loaded exclude dirs: $DIRS"
+          echo "dirs=$DIRS" >> "$GITHUB_OUTPUT"
+
+      - name: Run Claude security review
+        uses: anthropics/claude-code-security-review@main
+        with:
+          claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
+          comment-pr: true
+          upload-results: true
+          claude-model: claude-opus-4-6
+          claudecode-timeout: 40
+          run-every-commit: false
+          exclude-directories: ${{ steps.excludes.outputs.dirs }}
+          custom-security-scan-instructions: .github/security/claude-review/scan-instructions.md
+          false-positive-filtering-instructions: .github/security/claude-review/fp-filters.md

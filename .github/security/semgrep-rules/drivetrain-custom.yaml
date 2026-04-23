@@ -1,0 +1,213 @@
+# Custom Semgrep Rules for Drivetrain Security
+# Detects common security vulnerabilities and misconfigurations
+# Usage: semgrep --config=.github/security/semgrep-rules/drivetrain-custom.yaml <path>
+
+rules:
+  # Rule 1: Detect hardcoded credentials
+  - id: hardcoded-credentials
+    pattern-either:
+      - patterns:
+          - pattern: |
+              $PASSWORD = "..."
+          - metavariable-regex:
+              metavariable: $PASSWORD
+              regex: (?i)(password|pwd|pass|secret|key|token|credential)
+      - patterns:
+          - pattern: |
+              $VAR: "..."
+          - metavariable-regex:
+              metavariable: $VAR
+              regex: (?i)(password|pwd|pass|secret|key|token|api_key|access_key)
+    message: "Hardcoded credentials detected. Use environment variables or secrets manager."
+    languages: [python, javascript, java, go]
+    severity: ERROR
+
+  # Rule 2: Detect insecure HTTP usage
+  - id: insecure-http
+    patterns:
+      - pattern-either:
+          - pattern: requests.get("http://...")
+          - pattern: requests.post("http://...")
+          - pattern: requests.put("http://...")
+          - pattern: requests.delete("http://...")
+          - pattern: urllib.request.urlopen("http://...")
+          - pattern: fetch("http://...")
+    message: "Insecure HTTP usage detected. Use HTTPS instead."
+    languages: [python, javascript]
+    severity: WARNING
+
+  # Rule 3: SQL Injection patterns
+  - id: sql-injection
+    patterns:
+      - pattern-either:
+          - pattern: |
+              cursor.execute("SELECT * FROM $TABLE WHERE $COL = " + $USER_INPUT)
+          - pattern: |
+              $DB.query("... WHERE ... = " + $USER_INPUT)
+          - pattern: |
+              f"SELECT * FROM {table} WHERE id={user_input}"
+    message: "Potential SQL injection vulnerability. Use parameterized queries."
+    languages: [python, javascript, java]
+    severity: ERROR
+
+  # Rule 4: Missing input validation
+  - id: missing-input-validation
+    patterns:
+      - pattern-either:
+          - pattern: |
+              def $FUNC($INPUT):
+                  ... = $INPUT ...
+          - pattern: |
+              async function $FUNC($INPUT) {
+                  ... = $INPUT ...
+              }
+    message: "Missing input validation. Validate and sanitize user input."
+    languages: [python, javascript]
+    severity: WARNING
+
+  # Rule 5: Insecure randomness
+  - id: insecure-randomness
+    patterns:
+      - pattern-either:
+          - pattern: random.randint(...)
+          - pattern: Math.random()
+          - pattern: rand.Intn(...)
+    message: "Insecure random generation detected. Use cryptographically secure methods."
+    languages: [python, javascript, go]
+    severity: WARNING
+
+  # Rule 6: Unencrypted data transmission
+  - id: unencrypted-data
+    patterns:
+      - pattern-either:
+          - pattern: |
+              socket.socket($AF, $TYPE)
+              ...
+              socket.sendall($DATA)
+          - pattern: |
+              send($DATA, "...", $UNENCRYPTED)
+    message: "Unencrypted data transmission detected. Use TLS/SSL encryption."
+    languages: [python, go, java]
+    severity: WARNING
+
+  # Rule 7: Weak cryptographic algorithms
+  - id: weak-crypto
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: hashlib.sha1(...)
+          - pattern: crypto.createHash("md5")
+          - pattern: crypto.createHash("sha1")
+    message: "Weak cryptographic algorithm detected. Use SHA-256 or stronger."
+    languages: [python, javascript]
+    severity: ERROR
+
+  # Rule 8: Path traversal vulnerability
+  - id: path-traversal
+    patterns:
+      - pattern-either:
+          - pattern: open($USERDIR + "/" + $USERFILE)
+          - pattern: open(f"{$BASEDIR}/{$USERPATH}")
+          - pattern: |
+              $FILE = request.args.get("file")
+              ... = open($FILE)
+    message: "Potential path traversal vulnerability. Validate file paths."
+    languages: [python, javascript]
+    severity: ERROR
+
+  # Rule 9: Command injection
+  - id: command-injection
+    patterns:
+      - pattern-either:
+          - pattern: os.system($COMMAND + $USERINPUT)
+          - pattern: subprocess.call($COMMAND, shell=True)
+          - pattern: |
+              $COMMAND = `${user_input}`
+              exec($COMMAND)
+    message: "Command injection vulnerability detected. Use parameterized execution."
+    languages: [python, javascript]
+    severity: ERROR
+
+  # Rule 10: Unvalidated redirects
+  - id: unvalidated-redirect
+    patterns:
+      - pattern-either:
+          - pattern: |
+              redirect_url = request.args.get("redirect")
+              return redirect(redirect_url)
+          - pattern: |
+              url = req.query.url
+              res.redirect(url)
+    message: "Unvalidated redirect detected. Whitelist allowed redirect URLs."
+    languages: [python, javascript]
+    severity: WARNING
+
+  # Rule 11: Missing CORS validation
+  - id: missing-cors-validation
+    patterns:
+      - pattern: |
+          @app.route(...)
+          def $FUNC():
+              ... = request.headers.get("Origin")
+              ... = $ORIGIN
+      - pattern-not: |
+          ... = ALLOWED_ORIGINS
+          ...
+          if $ORIGIN not in ALLOWED_ORIGINS:
+    message: "Missing CORS validation. Validate and whitelist origins."
+    languages: [python]
+    severity: WARNING
+
+  # Rule 12: Excessive logging of sensitive data
+  - id: excessive-logging
+    patterns:
+      - pattern-either:
+          - pattern: |
+              logger.info(...$PASSWORD...)
+          - pattern: |
+              print(...$SECRET...)
+          - pattern: |
+              console.log(...$TOKEN...)
+    message: "Sensitive data logged. Remove or redact sensitive information."
+    languages: [python, javascript]
+    severity: WARNING
+
+  # Rule 13: Missing authentication check
+  - id: missing-auth-check
+    patterns:
+      - pattern: |
+          def $FUNC(request):
+              ... = request.GET.get("admin")
+              if admin:
+                  ...
+          ...
+      - pattern-not: |
+          @login_required
+          def $FUNC(request):
+    message: "Potentially missing authentication check. Verify authorization."
+    languages: [python]
+    severity: ERROR
+
+  # Rule 14: Hardcoded AWS credentials
+  - id: hardcoded-aws-credentials
+    patterns:
+      - pattern-either:
+          - pattern: aws_access_key_id="AKIA..."
+          - pattern: aws_secret_access_key="..."
+          - pattern: |
+              boto3.client(..., aws_access_key_id="...", aws_secret_access_key="...")
+    message: "Hardcoded AWS credentials detected. Use IAM roles or environment variables."
+    languages: [python, javascript]
+    severity: ERROR
+
+  # Rule 15: Insecure deserialization
+  - id: insecure-deserialization
+    patterns:
+      - pattern-either:
+          - pattern: pickle.loads($DATA)
+          - pattern: yaml.load($DATA)
+          - pattern: |
+              JSON.parse(eval($DATA))
+    message: "Insecure deserialization detected. Use safe parsing methods."
+    languages: [python, javascript]
+    severity: ERROR

@@ -1,0 +1,48 @@
+# Trivy configuration for vulnerability scanning
+# Usage: trivy config -c .github/security/trivy.yaml <path>
+
+severity:
+  - HIGH
+  - CRITICAL
+
+# Exit with non-zero status if vulnerabilities found
+exit-code: 1
+
+# Output format: json, table, sarif, cyclonedx, etc.
+format: table
+
+# Scan for misconfigurations
+scan-options:
+  # Include unfixed vulnerabilities
+  include-unfixed: false
+
+  # Include Dev/Test dependencies
+  include-dev: false
+
+# Vulnerability database settings
+db:
+  # Use offline database
+  repository: ghcr.io/aquasecurity/trivy-db
+
+# Security checks
+checks:
+  - AVD-AWS-0001
+  - AVD-AWS-0002
+  - AVD-AZU-0001
+  - AVD-GCP-0001
+
+# File patterns to scan
+file-patterns:
+  - "*.tf"
+  - "*.json"
+  - "*.yaml"
+  - "*.yml"
+
+# Ignore checks
+skip-checks: []
+
+# Custom ignore rules
+ignorefile: .trivyignore
+
+# Timeout for scanning
+timeout: 5m
