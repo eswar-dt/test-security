@@ -9,8 +9,10 @@ and posts findings as PR comments. Ground truth per class lives at
 [`eval/expected/<class>.md`](./expected/).
 
 Columns:
-- **Flagged:** TP = caught (true positive); FN = missed (false negative).
-  Parenthetical count = number of distinct findings reported for the class.
+- **Flagged:** TP = caught (true positive); FN = missed (false negative);
+  TN = safe code correctly left alone (true negative).
+  Parenthetical count = number of distinct findings reported (or, on the
+  negative-controls branch, the count of safe patterns correctly skipped).
 - **Severity (expected -> got):** compare claim vs ground truth.
 - **Fix quality:** Good / Partial / Wrong / None — does the suggested
   remediation actually fix the bug, is it minimal, no new issues?
@@ -33,16 +35,16 @@ Columns:
 | 9 | XSS | `vuln/xss` | — |  |  |  |  |  |  |
 | 10 | Log injection | `vuln/log-injection` | — |  |  |  |  |  |  |
 | 11 | Command injection — argv (depth probe) | `vuln/command-injection-argv` | [#4](https://github.com/DrivetrainAi/test-security/pull/4) | TP (3) | HIGH -> HIGH | Good | 0 | SSRF and auth-bypass as their own structured findings; CSRF-via-GET reasoning | Explicitly rebutted the "safe from injection" docblock; named both `ext::` transport and `--upload-pack=` flag injection; recommended `--` separator + scheme allowlist + `protocol.ext.allow=never` env hardening |
-| — | Negative controls | `safe/negative-controls` | — | n/a — should stay quiet |  | n/a |  | n/a |  |
+| — | Negative controls | `safe/negative-controls` | [#5](https://github.com/DrivetrainAi/test-security/pull/5) | TN (10/10) | n/a | n/a (no fix needed) | 0 | n/a | All 10 safe-but-suspicious patterns correctly left alone — including the typically FP-prone MD5-for-ETag and Stripe `pk_test_` literal. Strong signal that the review reads semantic context (comments, usage) rather than pattern-matching on tokens |
 
-### Running tally (3 of 11 complete)
+### Running tally (3 vuln tests + 1 negative-controls branch complete)
 
-- **True positives:** 3 / 3
-- **False negatives:** 0 / 3
+- **True positives on planted vulns:** 3 / 3
+- **False negatives on planted vulns:** 0 / 3
 - **Severity accuracy (got == expected):** 3 / 3
 - **Fix quality == Good:** 3 / 3
-- **False positives on `safe/negative-controls`:** branch not yet built
-- **Bonus TPs caught:** missing-auth on all 3 endpoints (consistent contextual reasoning); SSRF + CSRF-via-GET on test #11
+- **False positive rate on `safe/negative-controls`:** **0 / 10**
+- **Bonus TPs caught:** missing-auth on all 3 vuln endpoints (consistent contextual reasoning); SSRF + CSRF-via-GET on test #11
 
 ### Aggregate scores (final, fill in once all 11 vuln runs are complete)
 
@@ -50,7 +52,7 @@ Columns:
 - **False negatives:** _ / 11
 - **Severity accuracy (got == expected):** _ / 11
 - **Fix quality == Good:** _ / 11
-- **False positives on `safe/negative-controls`:** _
+- **False positives on `safe/negative-controls`:** 0 / 10 (locked in)
 
 ---
 
@@ -245,11 +247,49 @@ Not yet implemented.
 - PR: https://github.com/DrivetrainAi/test-security/pull/4
 - Review comment: see PR conversation
 
-### Negative controls — `safe/negative-controls`
+### Negative controls — `safe/negative-controls` (PR [#5](https://github.com/DrivetrainAi/test-security/pull/5))
 
-Not yet implemented. Will include safe-but-suspicious-looking code
-(parameterized queries, `SecureRandom`, properly escaped output,
-hardened `DocumentBuilderFactory`, allowlisted URL fetch, etc.).
+**Expected** (see [`eval/expected/negative-controls.md`](./expected/negative-controls.md)):
+- 10 safe-but-suspicious-looking patterns in `SafeUtilsController.java`,
+  each mimicking one planted-vuln class. The review should stay quiet on
+  all 10. Any finding counts as a false positive.
+
+**Actual:** zero findings posted by the workflow — TN on all 10.
+
+**Score:**
+- Flagged: TN — review correctly emitted no findings.
+- Per-pattern breakdown (all correctly skipped):
+  1. `/safe/user-by-name` — parameterized JDBC. ✅
+  2. `/safe/uptime` — `Runtime.exec(String[])` with constant args. ✅
+  3. `/safe/report` — allowlisted file read with `normalize` + `startsWith`. ✅
+  4. `/safe/parse-xml` — fully hardened `DocumentBuilderFactory`. ✅
+  5. `/safe/etag` — MD5 used for non-cryptographic content fingerprint
+     (the docblock explicitly says it is not used for any security
+     boundary). Strong test for context-reading; passed cleanly. ✅
+  6. `/safe/new-session-token` — `SecureRandom` for token bytes. ✅
+  7. `/safe/stripe-pk` — Stripe publishable test key (`pk_test_...`).
+     Most secret scanners flag any `pk_test_` literal regardless of
+     context; the docblock notes it is a publishable key documented as
+     safe to commit. Strong test for noise-resistance; passed cleanly. ✅
+  8. `/safe/health-upstream` — `URL` constructed from a hardcoded HTTPS
+     literal, no user input. ✅
+  9. `/safe/login-event` — SLF4J parameterized log (`{}` placeholder),
+     no concatenation. ✅
+  10. `/safe/echo` — `@RestController` returning a `Map<String, String>`,
+      JSON-serialized; no HTML rendering surface. ✅
+- False positive rate: **0 / 10.**
+
+**Why this matters:** the most informative cells in this row are #5 (MD5
+for ETag) and #7 (Stripe `pk_test_`). Both are pattern-match traps that
+typical secret scanners and SAST tools FP on regardless of context. The
+review reading the docblock + usage and staying silent is signal that it
+is doing semantic context analysis, not surface pattern matching.
+Caveat: 10 patterns is a small sample; later test branches may surface
+FP-prone patterns we haven't probed here (e.g., `eval` in a sandbox,
+GitHub Actions `pull_request_target`, etc.).
+
+**Links:**
+- PR: https://github.com/DrivetrainAi/test-security/pull/5
 
 ---
 
