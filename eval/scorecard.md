@@ -26,14 +26,14 @@ Columns:
 |---|---|---|---|---|---|---|---|---|---|
 | 1 | SQL injection | `vuln/sql-injection` | [#1](https://github.com/DrivetrainAi/test-security/pull/1) | TP (2) | HIGH -> HIGH | Good | 0 | Missing auth on `/users/search-advanced` | Caught both `filter` and `orderBy` sinks as separate findings; noted the sibling `findByName` correctly uses parameterized queries |
 | 2 | Command injection | `vuln/command-injection` | [#3](https://github.com/DrivetrainAi/test-security/pull/3) | TP (1) | HIGH -> HIGH | Good | 0 | Missing auth on `/ops/ping` | Caught `Runtime.exec` concatenation; flag-injection variant pre-empted in exploit scenario (`host=-c+1000+...`); recs include hostname allowlist regex, ProcessBuilder array form, and `InetAddress.isReachable()` as architectural alternative |
-| 3 | Path traversal | `vuln/path-traversal` | — |  |  |  |  |  |  |
-| 4 | Insecure deserialization | `vuln/deserialization` | — |  |  |  |  |  |  |
-| 5 | XXE | `vuln/xxe` | — |  |  |  |  |  |  |
-| 6 | Hardcoded credentials | `vuln/hardcoded-secrets` | — |  |  |  |  |  |  |
-| 7 | Weak crypto | `vuln/weak-crypto` | — |  |  |  |  |  |  |
-| 8 | SSRF | `vuln/ssrf` | — |  |  |  |  |  |  |
-| 9 | XSS | `vuln/xss` | — |  |  |  |  |  |  |
-| 10 | Log injection | `vuln/log-injection` | — |  |  |  |  |  |  |
+| 3 | Path traversal | `vuln/path-traversal` | [#10](https://github.com/DrivetrainAi/test-security/pull/10) |  |  |  |  |  |  |
+| 4 | Insecure deserialization | `vuln/deserialization` | [#17](https://github.com/DrivetrainAi/test-security/pull/17) |  |  |  |  |  |  |
+| 5 | XXE | `vuln/xxe` | [#16](https://github.com/DrivetrainAi/test-security/pull/16) |  |  |  |  |  |  |
+| 6 | Hardcoded credentials | `vuln/hardcoded-secrets` | [#11](https://github.com/DrivetrainAi/test-security/pull/11) |  |  |  |  |  |  |
+| 7 | Weak crypto | `vuln/weak-crypto` | [#12](https://github.com/DrivetrainAi/test-security/pull/12) |  |  |  |  |  |  |
+| 8 | SSRF | `vuln/ssrf` | [#13](https://github.com/DrivetrainAi/test-security/pull/13) |  |  |  |  |  |  |
+| 9 | XSS | `vuln/xss` | [#15](https://github.com/DrivetrainAi/test-security/pull/15) |  |  |  |  |  |  |
+| 10 | Log injection | `vuln/log-injection` | [#14](https://github.com/DrivetrainAi/test-security/pull/14) |  |  |  |  |  |  |
 | 11 | Command injection — argv (depth probe) | `vuln/command-injection-argv` | [#4](https://github.com/DrivetrainAi/test-security/pull/4) | TP (3) | HIGH -> HIGH | Good | 0 | SSRF and auth-bypass as their own structured findings; CSRF-via-GET reasoning | Explicitly rebutted the "safe from injection" docblock; named both `ext::` transport and `--upload-pack=` flag injection; recommended `--` separator + scheme allowlist + `protocol.ext.allow=never` env hardening |
 | — | Negative controls | `safe/negative-controls` | [#5](https://github.com/DrivetrainAi/test-security/pull/5) | TN (10/10) | n/a | n/a (no fix needed) | 0 | n/a | All 10 safe-but-suspicious patterns correctly left alone — including the typically FP-prone MD5-for-ETag and Stripe `pk_test_` literal. Strong signal that the review reads semantic context (comments, usage) rather than pattern-matching on tokens |
 
@@ -149,40 +149,112 @@ Columns:
 - PR: https://github.com/DrivetrainAi/test-security/pull/3
 - Review comment: see PR conversation
 
-### 3. Path traversal — `vuln/path-traversal`
+### 3. Path traversal — `vuln/path-traversal` (PR [#10](https://github.com/DrivetrainAi/test-security/pull/10))
 
-Not yet implemented.
+**Expected** (see [`eval/expected/path-traversal.md`](./expected/path-traversal.md)):
+- `FileController.download` concatenates `filename` from `@RequestParam` directly into
+  `Paths.get(REPORTS_DIR + filename)` with no `normalize()` or `startsWith()` guard —
+  classic path traversal (CWE-22).
+- Endpoint `/files/download` is unauthenticated (Javadoc TODO confirms this).
+- Expected severity for the traversal: **HIGH**.
 
-### 4. Insecure deserialization — `vuln/deserialization`
+**Actual:** _pending scanner run_
 
-Not yet implemented.
+---
 
-### 5. XXE — `vuln/xxe`
+### 4. Insecure deserialization — `vuln/deserialization` (PR [#17](https://github.com/DrivetrainAi/test-security/pull/17))
 
-Not yet implemented.
+**Expected** (see [`eval/expected/deserialization.md`](./expected/deserialization.md)):
+- `SessionController.restore` decodes the `X-Session-Token` HTTP header and passes
+  the bytes to `ObjectInputStream.readObject()` with no `ObjectInputFilter` allowlist.
+- Javadoc claims "load balancer verifies the signature" as mitigation — the reviewer
+  must rebut this (gadget chains bypass it; direct VPC access bypasses the LB).
+- Expected severity: **CRITICAL**.
 
-### 6. Hardcoded credentials — `vuln/hardcoded-secrets`
+**Actual:** _pending scanner run_
 
-Not yet implemented.
+---
 
-### 7. Weak crypto — `vuln/weak-crypto`
+### 5. XXE — `vuln/xxe` (PR [#16](https://github.com/DrivetrainAi/test-security/pull/16))
 
-Not yet implemented.
+**Expected** (see [`eval/expected/xxe.md`](./expected/xxe.md)):
+- `InvoiceController.upload` parses caller-supplied XML with a bare
+  `DocumentBuilderFactory.newInstance()` — no features disabled, DTD/external-entity
+  processing at insecure JDK defaults.
+- `file:///etc/passwd` exfiltration via SYSTEM entity; response body returns contents
+  directly (non-blind).
+- Expected severity: **HIGH**.
 
-### 8. SSRF — `vuln/ssrf`
+**Actual:** _pending scanner run_
 
-Not yet implemented. Note: PR #4 surfaced an SSRF finding on the
-`vuln/command-injection-argv` branch as a bonus TP — the planned dedicated
-SSRF test should still be run separately so we can score on a clean,
-single-class branch.
+---
 
-### 9. XSS — `vuln/xss`
+### 6. Hardcoded credentials — `vuln/hardcoded-secrets` (PR [#11](https://github.com/DrivetrainAi/test-security/pull/11))
 
-Not yet implemented.
+**Expected** (see [`eval/expected/hardcoded-secrets.md`](./expected/hardcoded-secrets.md)):
+- `PaymentService` hardcodes a Stripe `sk_live_` secret key, a `whsec_` webhook
+  signing secret, and an HS256 JWT symmetric key in static fields (CWE-798/321).
+- The `charge()` method also logs the Stripe secret key via SLF4J (CWE-532).
+- Expected severity: **CRITICAL** on the three credential fields, **HIGH** on the
+  log-disclosure.
 
-### 10. Log injection — `vuln/log-injection`
+**Actual:** _pending scanner run_
 
-Not yet implemented.
+---
+
+### 7. Weak crypto — `vuln/weak-crypto` (PR [#12](https://github.com/DrivetrainAi/test-security/pull/12))
+
+**Expected** (see [`eval/expected/weak-crypto.md`](./expected/weak-crypto.md)):
+- `PasswordService.hashPassword` uses `MessageDigest.getInstance("MD5")` with no
+  salt for password storage (CWE-328 + CWE-759). Javadoc comment claims "salt not
+  needed" — the reviewer must rebut this.
+- `PasswordService.generateResetToken` uses `java.util.Random` seeded with
+  `System.currentTimeMillis()` for a security-sensitive token (CWE-338).
+- Expected severity: **HIGH** on both.
+
+**Actual:** _pending scanner run_
+
+---
+
+### 8. SSRF — `vuln/ssrf` (PR [#13](https://github.com/DrivetrainAi/test-security/pull/13))
+
+**Expected** (see [`eval/expected/ssrf.md`](./expected/ssrf.md)):
+- `WebhookController.test` passes `url` from `@RequestParam` directly to
+  `new URL(url).openConnection()` with no scheme/host/port validation (CWE-918).
+- Response body returned verbatim — non-blind SSRF; AWS instance metadata
+  (`http://169.254.169.254/...`) and `file://` scheme both exploitable.
+- Expected severity: **HIGH**.
+
+Note: PR #4 surfaced an SSRF finding on the `vuln/command-injection-argv` branch
+as a bonus TP — this dedicated test scores on a clean single-class branch.
+
+**Actual:** _pending scanner run_
+
+---
+
+### 9. XSS — `vuln/xss` (PR [#15](https://github.com/DrivetrainAi/test-security/pull/15))
+
+**Expected** (see [`eval/expected/xss.md`](./expected/xss.md)):
+- `SearchController.search` reflects `q` from `@RequestParam` directly into an
+  HTML response body via string concatenation, with `Content-Type: text/html`
+  and no `HtmlUtils.htmlEscape()` call (CWE-79).
+- Reflected XSS; exploit: `?q=<script>document.location=...+document.cookie</script>`.
+- Expected severity: **HIGH**.
+
+**Actual:** _pending scanner run_
+
+---
+
+### 10. Log injection — `vuln/log-injection` (PR [#14](https://github.com/DrivetrainAi/test-security/pull/14))
+
+**Expected** (see [`eval/expected/log-injection.md`](./expected/log-injection.md)):
+- `AuthController.login` uses `+` string concatenation in all three `log.*` calls
+  instead of SLF4J `{}` placeholder form (CWE-117).
+- Allows newline injection to forge log entries:
+  `?username=alice%0aLogin+SUCCESS+for+user:+admin`.
+- Expected severity: **MEDIUM**.
+
+**Actual:** _pending scanner run_
 
 ### 11. Command injection — argv (depth probe) — `vuln/command-injection-argv` (PR [#4](https://github.com/DrivetrainAi/test-security/pull/4))
 
