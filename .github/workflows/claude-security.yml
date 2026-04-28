@@ -66,6 +66,7 @@ jobs:
           echo "dirs=$DIRS" >> "$GITHUB_OUTPUT"
 
       - name: Run Claude security review
+        id: claude-scan
         uses: anthropics/claude-code-security-review@0c6a49f1fa56a1d472575da86a94dbc1edb78eda
         with:
           claude-api-key: ${{ secrets.ANTHROPIC_SECURITY_SCANNER_API_KEY }}
@@ -78,17 +79,20 @@ jobs:
           custom-security-scan-instructions: .github/security/claude-review/scan-instructions.md
           false-positive-filtering-instructions: .github/security/claude-review/fp-filters.md
 
-      - name: Fail on HIGH or CRITICAL findings
+      - name: Fail on findings
         if: always()
         shell: bash
+        env:
+          FINDINGS_COUNT: ${{ steps.claude-scan.outputs.findings-count }}
         run: |
           set -euo pipefail
-          if [[ ! -f results.sarif ]]; then
-            echo "::warning::No SARIF file produced; skipping severity gate"
+          echo "Claude reported findings: ${FINDINGS_COUNT:-<not set>}"
+          if [[ -z "${FINDINGS_COUNT:-}" ]]; then
+            echo "::warning::findings-count output not set by action; severity gate skipped"
             exit 0
           fi
-          if jq -e '.runs[].results[] | select(.level == "error")' results.sarif > /dev/null; then
-            echo "::error::HIGH or CRITICAL findings present — failing the check"
+          if (( FINDINGS_COUNT > 0 )); then
+            echo "::error::${FINDINGS_COUNT} finding(s) reported — failing the check. Resolve via code fix or explicit risk acceptance."
             exit 1
           fi
-          echo "No HIGH/CRITICAL findings"
+          echo "No findings — gate passes"
