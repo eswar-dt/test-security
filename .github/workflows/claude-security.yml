@@ -28,12 +28,29 @@ jobs:
       EXCLUDE_FILE: .github/security/claude-review/exclude-dirs.txt
     steps:
       - name: Checkout PR
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11   # v4.1.1
         with:
           fetch-depth: 0
 
+      - name: Restore scanner config from base ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          git fetch --depth=1 origin "$BASE_SHA" 2>/dev/null || true
+          for f in scan-instructions.md fp-filters.md exclude-dirs.txt; do
+            path=".github/security/claude-review/$f"
+            if git cat-file -e "$BASE_SHA:$path" 2>/dev/null; then
+              git show "$BASE_SHA:$path" > "$path"
+              echo "Restored $f from $BASE_SHA"
+            else
+              echo "::warning::$f not present on base — using PR version (bootstrap PR only)"
+            fi
+          done
+
       - name: Load exclude directories
         id: excludes
+        shell: bash
         run: |
           set -euo pipefail
           if [[ ! -f "$EXCLUDE_FILE" ]]; then
@@ -60,3 +77,18 @@ jobs:
           exclude-directories: ${{ steps.excludes.outputs.dirs }}
           custom-security-scan-instructions: .github/security/claude-review/scan-instructions.md
           false-positive-filtering-instructions: .github/security/claude-review/fp-filters.md
+
+      - name: Fail on HIGH or CRITICAL findings
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f results.sarif ]]; then
+            echo "::warning::No SARIF file produced; skipping severity gate"
+            exit 0
+          fi
+          if jq -e '.runs[].results[] | select(.level == "error")' results.sarif > /dev/null; then
+            echo "::error::HIGH or CRITICAL findings present — failing the check"
+            exit 1
+          fi
+          echo "No HIGH/CRITICAL findings"
