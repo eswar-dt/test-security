@@ -31,6 +31,21 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          
+      - name: Restore scanner config from base ref
+        run: |
+          set -euo pipefail
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          git fetch --depth=1 origin "$BASE_SHA" 2>/dev/null || true
+          for f in scan-instructions.md fp-filters.md exclude-dirs.txt; do
+            path=".github/security/claude-review/$f"
+            if git cat-file -e "$BASE_SHA:$path" 2>/dev/null; then
+              git show "$BASE_SHA:$path" > "$path"
+              echo "Restored $f from $BASE_SHA"
+            else
+              echo "::warning::$f not present on base — using PR version (bootstrap PR only)"
+            fi
+          done
 
       - name: Load exclude directories
         id: excludes
