@@ -1,0 +1,210 @@
+name: Gitleaks Secret Scan
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    # No branch filter — runs on all PRs in this test repo.
+    # Production repos scope this to protected branches (staging-vN, preprod-vN, main-vN).
+
+# Cancel superseded runs on the same PR
+concurrency:
+  group: gitleaks-secret-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+# Principle of least privilege — mirrors claude-security-review.yml
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  gitleaks:
+    name: Gitleaks secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_CONFIG: .github/security/.gitleaks.toml
+      GITLEAKS_VERSION: "8.30.1"
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11   # v4.1.1
+        with:
+          fetch-depth: 0
+
+      - name: Restore Gitleaks config from base ref
+        # TOCTOU protection: always run the .gitleaks.toml that existed on the
+        # base branch when the PR was opened — not the version in the PR.
+        # This prevents a PR author from adding an allowlist entry for their
+        # own secret to suppress detection. On bootstrap PRs (config not yet on
+        # base) falls back to the PR version with a warning.
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          git fetch --depth=1 origin "$BASE_SHA" 2>/dev/null || true
+          if git cat-file -e "$BASE_SHA:$GITLEAKS_CONFIG" 2>/dev/null; then
+            git show "$BASE_SHA:$GITLEAKS_CONFIG" > "$GITLEAKS_CONFIG"
+            echo "Restored .gitleaks.toml from base SHA $BASE_SHA"
+          else
+            echo "::warning::.gitleaks.toml not present on base — using PR version (bootstrap PR only)"
+          fi
+
+      - name: Install Gitleaks ${{ env.GITLEAKS_VERSION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sSfL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          echo "Installed: $(gitleaks version)"
+
+      - name: Run Gitleaks
+        id: gitleaks-scan
+        shell: bash
+        env:
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        run: |
+          set -uo pipefail
+          GITLEAKS_EXIT=0
+          gitleaks detect \
+            --source . \
+            --config "$GITLEAKS_CONFIG" \
+            --log-opts "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" \
+            --redact \
+            --report-format json \
+            --report-path gitleaks-report.json \
+            --verbose \
+            --no-banner \
+            || GITLEAKS_EXIT=$?
+
+          # Parse finding count from report (written regardless of exit code)
+          FINDINGS=0
+          if [[ -f gitleaks-report.json ]]; then
+            FINDINGS=$(python3 -c "import json; d=json.load(open('gitleaks-report.json')); print(len(d) if isinstance(d, list) else 0)" 2>/dev/null || echo "0")
+          fi
+          echo "findings=$FINDINGS" >> "$GITHUB_OUTPUT"
+          echo "Gitleaks exit code: $GITLEAKS_EXIT | Findings: $FINDINGS"
+
+          if   [[ $GITLEAKS_EXIT -eq 0 ]]; then
+            echo "No secrets detected — gate passes"
+            exit 0
+          elif [[ $GITLEAKS_EXIT -eq 1 ]]; then
+            echo "::error::$FINDINGS secret(s) detected — see findings above (values redacted). Resolve before merging."
+            exit 1
+          else
+            echo "::error::Gitleaks exited with unexpected code $GITLEAKS_EXIT — scan may not have completed. PR is NOT cleared; blocking merge."
+            exit $GITLEAKS_EXIT
+          fi
+
+      - name: Comment on PR — secrets detected
+        if: failure() && steps.gitleaks-scan.outcome == 'failure'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea   # v7.0.1
+        with:
+          script: |
+            const count = '${{ steps.gitleaks-scan.outputs.findings }}';
+            const countStr = (count && count !== '0') ? ` — **${count} finding${count === '1' ? '' : 's'}**` : '';
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: [
+                `## ❌ Secret Detection Failed${countStr}`,
+                '',
+                'Gitleaks detected potential secrets in this pull request. **Do not merge** until resolved.',
+                '',
+                `**[View workflow logs](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})** to see which rule(s) fired and which file(s) are affected.`,
+                '> Secret values are redacted in logs — only rule ID, file path, and line number are shown.',
+                '',
+                '**Remediation:**',
+                '1. **Remove the secret from code** — reference it via an environment variable or secrets manager instead',
+                '2. **If already pushed to any branch** — treat the secret as compromised and rotate it immediately, regardless of whether it was "fake"',
+                '3. **If the value is a deliberately non-functional placeholder** — replace it with a string that cannot match a real credential format, or add it to the `.gitleaks.toml` allowlist with a justification comment',
+                '',
+                '---',
+                '*Gitleaks owns pattern-detectable secrets. For context-aware secrets (env fallbacks, conditional assignments), see the Claude Security Review findings.*',
+              ].join('\n'),
+            });
+
+      - name: Notify Slack on secrets detected
+        if: failure() && steps.gitleaks-scan.outcome == 'failure'
+        shell: bash
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_SECURITY_WEBHOOK_URL }}
+          PR_URL:        ${{ github.event.pull_request.html_url }}
+          PR_NUMBER:     ${{ github.event.pull_request.number }}
+          PR_TITLE:      ${{ github.event.pull_request.title }}
+          PR_AUTHOR:     ${{ github.event.pull_request.user.login }}
+          HEAD_REF:      ${{ github.event.pull_request.head.ref }}
+          REPO:          ${{ github.repository }}
+          RUN_URL:       ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FINDINGS:      ${{ steps.gitleaks-scan.outputs.findings }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SLACK_WEBHOOK:-}" ]]; then
+            echo "::warning::SLACK_SECURITY_WEBHOOK_URL not set — skipping Slack notification"
+            exit 0
+          fi
+          python3 -c "
+          import json, os, re, urllib.request
+          safe_title = re.sub(r'[<>&]', lambda m: {'<':'&lt;','>':'&gt;','&':'&amp;'}[m.group()], os.environ['PR_TITLE'])
+          count = os.environ.get('FINDINGS', '?')
+          count_str = (' (' + count + ' finding' + ('s' if count != '1' else '') + ')') if count not in ('', '0', '?') else ''
+          payload = json.dumps({
+            'text': ':rotating_light: Gitleaks detected a secret — merge blocked',
+            'blocks': [
+              {'type': 'section', 'text': {'type': 'mrkdwn',
+                'text': ':rotating_light: *Gitleaks detected a secret' + count_str + ' — merge blocked*\n<' + os.environ['PR_URL'] + '|PR #' + os.environ['PR_NUMBER'] + ': ' + safe_title + '>'}},
+              {'type': 'section', 'fields': [
+                {'type': 'mrkdwn', 'text': '*Repo:*\n\`' + os.environ['REPO'] + '\`'},
+                {'type': 'mrkdwn', 'text': '*Branch:*\n\`' + os.environ['HEAD_REF'] + '\`'},
+                {'type': 'mrkdwn', 'text': '*Author:*\n' + os.environ['PR_AUTHOR']},
+                {'type': 'mrkdwn', 'text': '*Run:*\n<' + os.environ['RUN_URL'] + '|View logs>'},
+              ]},
+              {'type': 'section', 'text': {'type': 'mrkdwn',
+                'text': ':key: Secret values are redacted in logs. Check the run for rule ID and file path.\n:warning: *If this secret was already pushed to any branch — rotate it immediately.*'}},
+            ]
+          })
+          req = urllib.request.Request(os.environ['SLACK_WEBHOOK'], payload.encode(), {'Content-Type': 'application/json'})
+          urllib.request.urlopen(req)
+          print('Slack alert sent to #security-alerts')
+          "
+
+      - name: Notify Slack on job timeout
+        if: cancelled()
+        shell: bash
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_SECURITY_WEBHOOK_URL }}
+          PR_URL:        ${{ github.event.pull_request.html_url }}
+          PR_NUMBER:     ${{ github.event.pull_request.number }}
+          PR_TITLE:      ${{ github.event.pull_request.title }}
+          PR_AUTHOR:     ${{ github.event.pull_request.user.login }}
+          HEAD_REF:      ${{ github.event.pull_request.head.ref }}
+          REPO:          ${{ github.repository }}
+          RUN_URL:       ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SLACK_WEBHOOK:-}" ]]; then
+            echo "::warning::SLACK_SECURITY_WEBHOOK_URL not set — skipping timeout notification"
+            exit 0
+          fi
+          python3 -c "
+          import json, os, re, urllib.request
+          safe_title = re.sub(r'[<>&]', lambda m: {'<':'&lt;','>':'&gt;','&':'&amp;'}[m.group()], os.environ['PR_TITLE'])
+          payload = json.dumps({
+            'text': ':stopwatch: Gitleaks scan timed out — PR not scanned',
+            'blocks': [
+              {'type': 'section', 'text': {'type': 'mrkdwn',
+                'text': ':stopwatch: *Gitleaks scan timed out — PR was not scanned*\n<' + os.environ['PR_URL'] + '|PR #' + os.environ['PR_NUMBER'] + ': ' + safe_title + '>'}},
+              {'type': 'section', 'fields': [
+                {'type': 'mrkdwn', 'text': '*Repo:*\n\`' + os.environ['REPO'] + '\`'},
+                {'type': 'mrkdwn', 'text': '*Branch:*\n\`' + os.environ['HEAD_REF'] + '\`'},
+                {'type': 'mrkdwn', 'text': '*Author:*\n' + os.environ['PR_AUTHOR']},
+                {'type': 'mrkdwn', 'text': '*Run:*\n<' + os.environ['RUN_URL'] + '|View logs>'},
+              ]},
+              {'type': 'section', 'text': {'type': 'mrkdwn',
+                'text': ':warning: *Do not merge* — re-run the scan or perform a manual review before approving.'}},
+            ]
+          })
+          req = urllib.request.Request(os.environ['SLACK_WEBHOOK'], payload.encode(), {'Content-Type': 'application/json'})
+          urllib.request.urlopen(req)
+          print('Slack timeout notification sent to #security-alerts')
+          "

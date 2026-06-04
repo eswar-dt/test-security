@@ -1,114 +1,72 @@
-# Gitleaks configuration file
-# Detects secrets and credentials in git repositories
+# Drivetrain Armor — Gitleaks configuration
+#
+# Canonical source: DrivetrainAi/armor at .github/security/.gitleaks.toml
+# Propagate this file verbatim to every repo at the same path.
+#
+# ── Division of responsibility ────────────────────────────────────────────────
+# Gitleaks (this file)   Pattern-detectable secrets: known API key formats,
+#                        tokens, private keys, cloud credentials.
+#                        Fires on every commit in the PR diff, deterministically.
+#
+# Claude scanner         Context-aware secrets: env fallbacks, conditional
+#                        assignments (e.g. `key = os.getenv("K") or "hardcoded"`),
+#                        secrets embedded in comments or log statements.
+#                        Also owns all vulnerability classes: injection, auth
+#                        bypass, IaC misconfig, crypto weakness.
+#
+# There is intentional overlap on credential formats (both tools check them).
+# Defense in depth is preferred over a clean split that creates blind spots.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# TOCTOU NOTE: secret-scan.yml restores this file from the base-branch SHA
+# before running. A PR author cannot weaken rules by modifying this file in
+# their PR — the base-branch version always wins. Changes here only take
+# effect after merging to the protected branch.
 
-title = "Gitleaks Config"
-description = "Custom Gitleaks rules for AWS secrets, private keys, and API keys"
+title = "Drivetrain Gitleaks Config"
 
-# AWS Access Keys
+# Inherit all ~150 built-in Gitleaks rules (GitHub, AWS, Stripe, Slack, GCP,
+# Azure, Twilio, SendGrid, private keys, JWTs, database URLs, and more).
+# Custom rules below cover formats absent from the built-in set.
+[extend]
+useDefault = true
+
+# ── Drivetrain custom rules ───────────────────────────────────────────────────
+
 [[rules]]
-id = "aws-access-key"
-description = "AWS Access Key"
-regex = '''AKIA[0-9A-Z]{16}'''
-secretGroup = 1
-keywords = ["aws", "access", "key"]
-confidence = "High"
+id          = "launchdarkly-sdk-key"
+description = "LaunchDarkly server-side SDK key"
+regex       = '''sdk-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'''
+keywords    = ["launchdarkly", "launch_darkly", "ld_sdk", "sdk_key", "sdkKey"]
 
 [[rules]]
-id = "aws-secret-key"
-description = "AWS Secret Access Key"
-regex = '''aws_secret_access_key\s*=\s*['""]?([A-Za-z0-9/+=]{40})['""]?'''
-secretGroup = 1
-keywords = ["aws", "secret", "access", "key"]
-confidence = "High"
+id          = "launchdarkly-mobile-key"
+description = "LaunchDarkly mobile SDK key"
+regex       = '''mob-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'''
+keywords    = ["launchdarkly", "launch_darkly", "mobile_key", "mobileKey"]
 
-# Private Keys
-[[rules]]
-id = "private-key"
-description = "Private Key (RSA, DSA, EC, PGP)"
-regex = '''-----BEGIN (RSA|DSA|EC|PGP|OPENSSH) PRIVATE KEY-----'''
-keywords = ["private", "key", "rsa", "dsa", "ec", "pgp"]
-confidence = "High"
+# ── Allowlist ─────────────────────────────────────────────────────────────────
+# POLICY: allowlist specific known-FP strings ONLY.
+#
+# NO path or file-pattern exemptions. A credential in src/test/java/, a class
+# named *Fixture, or a file with a comment saying "fake" is still a credential
+# if it matches a real service's key format. Gitleaks will flag it.
+#
+# If you need to commit a deliberately fake credential for documentation or
+# test purposes, use a value that provably cannot match a real credential —
+# e.g. the AWS-published example key below. Do not add path exemptions.
 
-[[rules]]
-id = "generic-api-key"
-description = "Generic API Key"
-regex = '''api[_-]?key\s*=\s*['""]?([A-Za-z0-9]{32,})['""]?'''
-secretGroup = 1
-keywords = ["api", "key"]
-confidence = "Medium"
-
-# GitHub Token
-[[rules]]
-id = "github-token"
-description = "GitHub Personal Access Token"
-regex = '''gh[pou]_[A-Za-z0-9_]{36,255}'''
-keywords = ["github", "token", "pat"]
-confidence = "High"
-
-# Slack Token
-[[rules]]
-id = "slack-token"
-description = "Slack Bot Token"
-regex = '''xox[baprs]-[0-9a-zA-Z]{10,48}'''
-keywords = ["slack", "token", "bot"]
-confidence = "High"
-
-# Database Connection Strings
-[[rules]]
-id = "db-connection-string"
-description = "Database Connection String"
-regex = '''(mysql|postgres|mongodb)://[^:]+:[^@]+@[^\s]+'''
-secretGroup = 0
-keywords = ["db", "database", "connection", "password"]
-confidence = "High"
-
-# Basic Auth Credentials
-[[rules]]
-id = "basic-auth"
-description = "Basic Authentication Credentials"
-regex = '''basic\s+[A-Za-z0-9+/=]{20,}'''
-keywords = ["basic", "auth", "password"]
-confidence = "Medium"
-
-# JSON Web Token
-[[rules]]
-id = "jwt-token"
-description = "JSON Web Token"
-regex = '''eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.(?:[A-Za-z0-9_-]+)?'''
-keywords = ["jwt", "token"]
-confidence = "Medium"
-
-# Generic Password Pattern
-[[rules]]
-id = "generic-password"
-description = "Generic Password Assignment"
-regex = '''(?i)(password|passwd|pwd|pass)\s*[:=]\s*['""]?([^\s'""]+)['""]?'''
-secretGroup = 2
-keywords = ["password", "passwd", "pwd"]
-confidence = "Low"
-
-# Allowlist for test/example files
 [allowlist]
-description = "Allowlist for test and example files"
-files = [
-  "test.*",
-  ".*_test\\..*",
-  "example.*",
-  "mock.*",
-  ".*/test/.*",
-  ".*\\.test\\..*"
-]
-paths = [
-  "tests/",
-  "test/",
-  "examples/",
-  "__pycache__/",
-  ".venv/",
-  "node_modules/"
-]
-
-# Specific strings to ignore (common false positives)
+description = "Known non-secret strings — official vendor documentation examples only"
 regexes = [
-  "AKIAIOSFODNN7EXAMPLE",  # AWS example access key
-  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",  # AWS example secret key
+  # AWS official documentation example (published by AWS at docs.aws.amazon.com)
+  '''AKIAIOSFODNN7EXAMPLE''',
+  # AWS official secret key example
+  '''wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY''',
+  # TOCTOU ATTACK SIMULATION: this allowlist entry attempts to suppress the
+  # LaunchDarkly SDK key added in this PR. The TOCTOU protection in
+  # gitleaks-scan.yml should restore the base-branch .gitleaks.toml before
+  # running, making this allowlist entry invisible to the scanner.
+  # Expected result: launchdarkly-sdk-key is still detected despite this entry.
+  '''sdk-8a3f7c2e-1b4d-49a0-b6e1-9c5d8f2a1e07''',
 ]
