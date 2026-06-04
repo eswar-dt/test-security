@@ -1,0 +1,37 @@
+# Sentinel test — gitleaks coverage gap for Drivetrain-internal key formats
+#
+# PURPOSE: Verify whether gitleaks catches the `gandalf-<UUID>` key format.
+#
+# EXPECTED RESULTS:
+#   gandalf-91e165cc-...  → NOT caught  (no built-in or custom rule exists)
+#   SG.-nm40x0nQbq4...    → CAUGHT      (SendGrid built-in rule fires)
+#
+# REAL-WORLD PRECEDENT:
+#   Both keys were present in tesseract regression-v2-tests.yml for 17 months
+#   before being caught by GitHub secret scanning (not gitleaks).
+#   PR that introduced them: #3078 (targeted main-v2, Dec 2024)
+#   PR that removed them:    #4845 (ENG-73827, May 2026)
+#
+# ACTION REQUIRED IF GANDALF KEY IS NOT CAUGHT:
+#   Add custom rule to .github/security/.gitleaks.toml:
+#
+#   [[rules]]
+#   id          = "drivetrain-gandalf-key"
+#   description = "Drivetrain Gandalf service API key"
+#   regex       = '''gandalf-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'''
+#   keywords    = ["gandalf", "api_key", "apiKey", "API_KEY"]
+
+steps:
+  - name: TC-GANDALF-1 — hardcoded Gandalf key (no gitleaks rule)
+    run: |
+      # Expect: gitleaks MISSES this (gap)
+      export API_KEY="gandalf-91e165cc-3421-4412-ab05-1718b2c4ec8b"
+      echo "Running with key: $API_KEY"
+
+  - name: TC-SENDGRID-1 — SendGrid key format (proven caught)
+    run: |
+      # Result already confirmed: GitHub push protection blocked the real key.
+      # SendGrid SG.* format is in the built-in ruleset — no gap here.
+      # Placeholder used so the sentinel file documents both test cases.
+      export SENDGRID_API_KEY="SG.<redacted-proven-blocked-by-push-protection>"
+      echo "Sending email via: $SENDGRID_API_KEY"
