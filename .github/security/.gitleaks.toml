@@ -33,6 +33,16 @@ useDefault = true
 
 # ── Drivetrain custom rules ───────────────────────────────────────────────────
 
+# Override broken built-in rule: gitleaks 8.30.1 built-in aws-access-key uses
+# secretGroup=1 but the regex uses non-capturing (?:...) — causes FTL on load.
+# This override replaces it with a valid regex using a proper capture group.
+[[rules]]
+id          = "aws-access-key"
+description = "AWS Access Key ID"
+regex       = '''((?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16})'''
+secretGroup = 1
+keywords    = ["AKIA", "aws_access_key", "access_key_id"]
+
 [[rules]]
 id          = "launchdarkly-sdk-key"
 description = "LaunchDarkly server-side SDK key"
